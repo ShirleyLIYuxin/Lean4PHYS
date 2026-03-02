@@ -5,7 +5,7 @@ We present **Lean4PHYS**, a comprehensive reasoning framework for college-level 
 
 Please see the details in our full paper: [arxiv](https://arxiv.org/abs/2510.26094)
 
-![Lean4PHYS](../images/Lean4PHYS.png)
+![Lean4PHYS](../image/Lean4PHYS.png)
 
 ## LICENSE and Usage
 The PhysLib library is licensed with Apache-2.0, of which parts come from [teorth_analysis](https://github.com/teorth/analysis) , aligned with the origin repository. 
@@ -29,4 +29,4 @@ If you found our project useful, please cite us as:
 ```
 
 ## Contact Information 
-For help or issues using Lean4PHYS, you can submit a GitHub issue, send messages in the [Zulip channel](https://leanprover.zulipchat.com/#narrow/channel/479953-PhysLean/topic/PhysLib/with/553660982), or send emials to the authors. 
+For help or issues using Lean4PHYS, you can submit a GitHub issue, send messages in the [Zulip channel](https://leanprover.zulipchat.com/#narrow/channel/479953-PhysLean/topic/PhysLib/with/553660982), or send emials to Yuxin Li（ylinq@connect.ust.hk). 
