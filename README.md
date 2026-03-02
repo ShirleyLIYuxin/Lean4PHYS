@@ -5,7 +5,7 @@ We present **Lean4PHYS**, a comprehensive reasoning framework for college-level 
 
 Please see the details in our full paper: [arxiv](https://arxiv.org/abs/2510.26094)
 
-![Lean4PHYS](../image/Lean4PHYS.png)
+![Lean4PHYS](image/Lean4PHYS.png)
 
 ## LICENSE and Usage
 The PhysLib library is licensed with Apache-2.0, of which parts come from [teorth_analysis](https://github.com/teorth/analysis) , aligned with the origin repository. 
