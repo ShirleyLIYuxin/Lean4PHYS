@@ -16,6 +16,7 @@ The LeanPhysBench dataset is licensed with CC BY-NC 4.0, aligned with the copyri
 
 ## News
 [2026.3.5] 🔉 We have released the documentation for our enriched version of *PhysLib*. We will continue to improve the library and contributions from the community are more than welcome!
+
 [2026.3.2] 🔉 We have uploaded our initial version of *PhysLib* and *LeanPhysBench*. A structured ducomentation of *PhysLib*, enriched version of *PhysLib*, and the evaluation pipline of *LeanPhysBench* will coming soon. 
 
 ## Citing Us
