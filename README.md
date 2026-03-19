@@ -34,4 +34,4 @@ If you found our project useful, please cite us as:
 ```
 
 ## Contact Information 
-For help or issues using Lean4PHYS, you can submit a GitHub issue, send messages in the [Zulip channel](https://leanprover.zulipchat.com/#narrow/channel/479953-PhysLean/topic/PhysLib/with/553660982), or send emials to Yuxin Li（ylinq@connect.ust.hk). 
+For help or issues using Lean4PHYS, you can submit a GitHub issue, send messages in the [Zulip channel](https://leanprover.zulipchat.com/#narrow/channel/479953-PhysLean/topic/PhysLib/with/553660982), or send emails to Yuxin Li（ylinq@connect.ust.hk). 
