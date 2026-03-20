@@ -97,6 +97,7 @@ python eval/prove_writer.py \
 python eval/verify.py \
     --checkpoint_dir ./checkpoints/<model-name>/ \
     --project_dir ./PhysLib_v1 \
+    --output_dir ./checkpoints/<model-name>_verified/ \
     --lib_version v1 \
     --max_workers 16
 ```
@@ -106,6 +107,7 @@ For PhysLib v2 verification (auto-replaces `PHYSlib` → `PhysLib` in imports):
 python eval/verify.py \
     --checkpoint_dir ./checkpoints/<model-name>/ \
     --project_dir ./PhysLib_v2 \
+    --output_dir ./checkpoints/<model-name>_verified/ \
     --lib_version v2
 ```
 
