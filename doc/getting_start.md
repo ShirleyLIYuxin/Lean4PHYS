@@ -108,7 +108,8 @@ python eval/verify.py \
     --checkpoint_dir ./checkpoints/<model-name>/ \
     --project_dir ./PhysLib_v2 \
     --output_dir ./checkpoints/<model-name>_verified/ \
-    --lib_version v2
+    --lib_version v2 \
+    --max_workers 16
 ```
 
 ### 4. Evaluation: Compute pass@N
