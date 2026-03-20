@@ -1,0 +1,6 @@
+openai>=1.0
+tqdm
+transformers
+torch
+# Optional: only needed for --backend vllm
+# vllm

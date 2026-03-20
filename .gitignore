@@ -1,0 +1,31 @@
+# Lean
+.lake/
+lake-packages/
+mathlib/
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# Checkpoints & outputs
+checkpoints/
+output/
+
+# Environment & secrets
+*.env
+.env.*
+credentials.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

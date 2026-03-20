@@ -1,0 +1,1813 @@
+
+--- File: Foundations/UnitsSystem.lean ---
+```lean4
+import Mathlib.Tactic
+import Mathlib.Algebra.Group.InjSurj
+import Mathlib.Order.Defs.PartialOrder
+
+/-! A framework to formalize units (such as length, time, mass, velocity, etc.) in Lean.
+-/
+
+/- Dimensions of units are measured by an additive group `Dimensions`, which will typically be a
+free moduleian group on a finite number of generators, representing fundamental units such as length,
+mass, and time.  We bundle this together in a class `UnitsSystem`.  To use this system, we create
+an instance of it, allowing in particular the additive group `Dimensions` to be accessed freely
+within the `UnitsSystem` namespace.
+-/
+
+class UnitsSystem where
+  Dimensions: Type*
+  addCommGroup: AddCommGroup Dimensions
+
+/- The additive group structure of `Dimensions` needs to be explicitly registered as an instance. -/
+attribute [instance] UnitsSystem.addCommGroup
+
+namespace UnitsSystem
+
+variable [UnitsSystem]
+
+/-- The two key types here are `Formal` and `Scalar d`.  `Scalar d` is the space of scalar
+quantities whose units are given by `d:Dimensions`.  Collectively, they generate a graded commutative
+ ring `Formal`, which can be conveniently described using the existing Mathlib structure
+ `AddMonoidAlgebra`.  Algebraic manipulations of scalar quantities will be most conveniently
+ handled by casting these quantities into the commutative ring  `Formal`, where one can use
+ standard Mathlib tactics such as `ring`.
+
+In principle one could also develop vector-valued quantities with dimension, but for now we
+restrict attention to scalar quantities only.
+-/
+abbrev Formal := AddMonoidAlgebra ℝ Dimensions
+
+/-- The data `val` of a scalar quantity can be interpreted as the numerical value of that
+quantity with respect to some standard set of units (e.g., SI units). -/
+@[ext]
+structure Scalar (d:Dimensions) where
+  val : ℝ
+
+theorem Scalar.val_injective (d : Dimensions) : Function.Injective (Scalar.val (d := d)) :=
+  fun x y h => by aesop
+
+/- One has the option to `work in coordinates` in a given calculation by using `simp [←val_inj]` (or `simp [←cast_eq]` below, if casting is required).  Or one can adopt
+a `coordinate-free` approach in which any tool directly accessing `val` is avoided.
+This library allows for both approaches to be employed. -/
+theorem Scalar.val_inj {d:Dimensions} (q₁ q₂:Scalar d) :
+  q₁.val = q₂.val ↔ q₁ = q₂ := Scalar.val_injective _ |>.eq_iff
+
+
+/-- We will encounter a technical issue with Lean's type system, namely that the type `Scalar d`
+and `Scalar d'` are not identical if `d'` and `d` are merely propositionally equal (as opposed
+to definitionally equal); for instance, `Scalar (d₁+d₂)` and `Scalar (d₂+d₁)` are distinct types.
+Technically, this renders multiplication on scalar types noncommutative. To get around this, we
+create a casting operator, where the propositional equality is attempted to be resolved by the Lean
+tactic `module` whenever possible.  Unfortunately, the casting operator from `Scalar d` to `Scalar d'`
+cannot be captured by standard Lean coercion classes such as `Coe` or `CoeOut` as each of the types
+here contain parameters not present in the other.-/
+def Scalar.cast {d d':Dimensions}  (q: Scalar d) (_ : d' = d := by module) : Scalar d' :=
+  ⟨q.val⟩
+
+/-- This is a variant of `Scalar.val_inj` that handles casts.-/
+theorem Scalar.cast_eq {d d':Dimensions} (q: Scalar d) (q': Scalar d') (h: d = d' := by module)
+  : q.val = q'.val ↔ q = q'.cast h := by aesop
+
+theorem Scalar.cast_eq_symm {d d':Dimensions} (q: Scalar d) (q': Scalar d') (h: d = d' := by module)
+  : q = q'.cast h ↔ q' = q.cast h.symm := by aesop
+
+@[simp]
+theorem Scalar.cast_val {d d':Dimensions} (q: Scalar d) (h: d' = d := by module)
+  : (q.cast h).val = q.val := by aesop
+
+/-- The existing Mathlib method `AddMonoidAlgebra.single` is perfect for embedding each type of
+scalar into the formal graded ring `Formal`. -/
+@[coe]
+noncomputable def Scalar.toFormal {d:Dimensions} (q:Scalar d) : Formal :=
+  AddMonoidAlgebra.single d q.val
+
+noncomputable instance Scalar.instCoeFormal (d: Dimensions) : CoeOut (Scalar d) Formal where
+  coe := toFormal
+
+/-- Many identities  involving several types of `Scalar`s can be dealt with by applying
+`simp [←toFormal_inj]` to move everything to `Formal`.  A large number of further `simp` lemmas
+in this file are then designed to simplify such `Formal` expressions, often by pushing casting
+operators inward back to the `Scalar` types.  As such, there will be significant overlap between
+the `simp` and `norm_cast` tags. -/
+@[simp]
+theorem Scalar.toFormal_inj {d: Dimensions} (q₁ q₂:Scalar d) :
+  (q₁:Formal) = (q₂:Formal) ↔ q₁ = q₂ := by
+  constructor
+  . simp [toFormal, ←val_inj]; intro h
+    replace h := congr($h d)
+    simpa using h
+  intro h; simp [h]
+
+/-- Conveniently, casts from one scalar to another will automatically disappear when moving to
+`Formal`. -/
+@[simp]
+theorem Scalar.toFormal_cast {d d': Dimensions} (q:Scalar d) (h:d' = d := by module) :
+  ((q.cast h):Formal) = (q:Formal) := by
+  subst h
+  simp_all only [cast]
+
+instance Scalar.instZero {d:Dimensions} : Zero (Scalar d) where
+  zero := ⟨ 0 ⟩
+
+@[simp]
+theorem Scalar.val_zero {d:Dimensions} : (0:Scalar d).val = 0 := rfl
+
+/-- We will use the `NeZero` class to tag some scalars as non-zero; this becomes relevant when
+using such scalars as units.   One could also introduce API to tag some scalars as positive, but
+we currently are not implementing this. -/
+theorem Scalar.neZero_iff {d:Dimensions} (q:Scalar d) : NeZero q ↔ q.val ≠ 0 := by simp [_root_.neZero_iff, ←val_inj]
+
+@[simp, norm_cast]
+theorem Scalar.toFormal_zero {d:Dimensions} : ((0:Scalar d):Formal) = 0 := by simp [toFormal]
+
+/-- In the next few lines of code we give `Scalar d` the structure of a real vector space,
+which is of course compatible with the real vector space structure on `Formal`. -/
+instance Scalar.instAdd {d:Dimensions} : Add (Scalar d) where
+  add q₁ q₂ := ⟨q₁.val + q₂.val⟩
+
+@[simp]
+theorem Scalar.val_add {d:Dimensions} (q₁ q₂:Scalar d) : (q₁ + q₂).val = q₁.val + q₂.val := rfl
+
+/-- Note how the `simp` lemma is in the direction of pushing casts inward. -/
+@[simp,norm_cast]
+theorem Scalar.toFormal_add {d:Dimensions} (q₁ q₂:Scalar d) : ((q₁ + q₂:Scalar d):Formal) = (q₁:Formal) + (q₂:Formal) := by
+  simp [toFormal]
+
+instance Scalar.instNeg {d:Dimensions} : Neg (Scalar d) where
+  neg q := ⟨-q.val⟩
+
+@[simp]
+theorem Scalar.val_neg {d:Dimensions} (q:Scalar d) : (-q).val = -q.val := rfl
+
+instance Scalar.instNeZero_neg {d:Dimensions} (q:Scalar d) [h:NeZero q] : NeZero (-q) := by
+  rw [neZero_iff] at h ⊢
+  simp [h]
+
+@[simp,norm_cast]
+theorem Scalar.toFormal_neg {d:Dimensions} (q:Scalar d) : ((-q:Scalar d):Formal) = -(q:Formal) := by
+  simp [toFormal]
+
+instance Scalar.instSub {d:Dimensions} : Sub (Scalar d) where
+  sub q₁ q₂ := ⟨q₁.val - q₂.val⟩
+
+@[simp]
+theorem Scalar.val_sub {d:Dimensions} (q₁ q₂ : Scalar d) : (q₁ - q₂).val = q₁.val - q₂.val := rfl
+
+@[simp,norm_cast]
+theorem Scalar.toFormal_sub {d:Dimensions} (q₁ q₂ :Scalar d) : ((q₁ - q₂ :Scalar d):Formal) = (q₁:Formal) - q₂ := by
+  simp [toFormal]
+
+instance Scalar.instSMul {α} {d:Dimensions} [SMul α ℝ] : SMul α (Scalar d) where
+  smul c q := ⟨c • q.val⟩
+
+@[simp]
+theorem Scalar.val_smul {α} {d:Dimensions} [SMul α ℝ] (a : α) (q:Scalar d) : (a • q).val = a • q.val := rfl
+
+instance Scalar.instAddGroup {d:Dimensions} : AddGroup (Scalar d) :=
+  val_injective _ |>.addGroup _ val_zero val_add val_neg val_sub (Function.swap val_smul) (Function.swap val_smul)
+
+instance Scalar.instAddCommGroup {d:Dimensions} : AddCommGroup (Scalar d) :=
+  val_injective _ |>.addCommGroup _ val_zero val_add val_neg val_sub (Function.swap val_smul) (Function.swap val_smul)
+
+/-- The dimensionless scalars `Scalar 0` can be identified with real numbers. -/
+@[coe]
+def Scalar.ofReal (r:ℝ) : Scalar 0 := ⟨ r ⟩
+
+instance Scalar.instCoeReal : Coe ℝ (Scalar 0) where
+  coe := ofReal
+
+@[simp]
+theorem Scalar.coe_val (r:ℝ) : (r:Scalar 0).val = r := rfl
+
+@[norm_cast,simp]
+theorem Scalar.coe_zero : ((0:ℝ):Scalar 0) = 0 := rfl
+
+theorem Scalar.neZero_coe_iff {r:ℝ} : NeZero (r:Scalar 0) ↔ r ≠ 0 := by
+  simp [neZero_iff]
+
+@[simp]
+theorem Scalar.coe_inj {r s:ℝ} : (r:Scalar 0) = (s:Scalar 0) ↔ r = s := by
+  simp [ofReal]
+
+@[norm_cast,simp]
+theorem Scalar.coe_add (r s:ℝ) : ((r+s:ℝ):Scalar 0) = (r:Scalar 0) + (s:Scalar 0) := rfl
+
+@[norm_cast,simp]
+theorem Scalar.coe_neg (r:ℝ) : ((-r:ℝ):Scalar 0) = -(r:Scalar 0) := rfl
+
+@[norm_cast,simp]
+theorem Scalar.coe_sub (r s:ℝ) : ((r-s:ℝ):Scalar 0) = (r:Scalar 0) - (s:Scalar 0) := by
+  simp [ofReal]; rfl
+
+/-- It is convenient to view the real numbers as a subring of the `Formal` ring, thus identifying
+scalar multiplication with ordinary multiplication. -/
+noncomputable instance Formal.instCoeReal : Coe ℝ Formal where
+  coe r := ((r:Scalar 0):Formal)
+
+@[norm_cast,simp]
+theorem Formal.coe_zero : ((0:ℝ):Formal) = 0 := by
+  simp
+
+@[norm_cast,simp]
+theorem Formal.coe_one : ((1:ℝ):Formal) = 1 := by
+  rfl
+
+@[norm_cast,simp]
+theorem Formal.coe_nat (n:ℕ) : ((n:ℝ):Formal) = (n:Formal) := by
+  rfl
+
+@[norm_cast,simp]
+theorem Formal.coe_int (n:ℤ) : ((n:ℝ):Formal) = (n:Formal) := by
+  rfl
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_smul {d:Dimensions} (c:ℝ) (q:Scalar d)
+  : ((c • q:Scalar d):Formal) = (c:Formal) * (q:Formal) := by
+  simp [toFormal, AddMonoidAlgebra.single_mul_single]
+
+
+@[simp]
+theorem Formal.smul_eq_mul (c:ℝ) (x:Formal) : c • x = (c:Formal) * x := by
+  ext n
+  simp [Scalar.toFormal]
+
+@[simp]
+theorem Formal.smul_eq_mul' (c:ℕ) (x:Formal) : c • x = (c:Formal) * x := by
+  simp
+
+@[simp]
+theorem Formal.smul_eq_mul'' (c:ℤ) (x:Formal) : c • x = (c:Formal) * x := by
+  simp
+
+@[norm_cast,simp]
+theorem Scalar.coe_mul (r s:ℝ) : ((r*s:ℝ):Scalar 0) = r • (s:Scalar 0) := by
+  ext; simp [ofReal]
+
+/-- We are finally able to view `Scalar` as a vector space over `ℝ` as promised. -/
+instance Scalar.instModule {d:Dimensions} : Module ℝ (Scalar d) where
+  smul_add c q₁ q₂ := by simp [←toFormal_inj]; ring
+  add_smul c1 c2 q := by simp [←toFormal_inj]; ring
+  one_smul q := by simp [←toFormal_inj]
+  zero_smul q := by simp [←toFormal_inj]
+  mul_smul c1 c2 q := by simp [←toFormal_inj]; ring
+  smul_zero c := by simp [←toFormal_inj]
+
+@[simp]
+theorem Scalar.val_smul' {d:Dimensions} (c:ℕ) (q:Scalar d) : (c • q).val = c * q.val := by simp [←Nat.cast_smul_eq_nsmul ℝ]
+
+@[simp]
+theorem Scalar.val_smul'' {d:Dimensions} (c:ℤ) (q:Scalar d) : (c • q).val = c * q.val := by simp [←Int.cast_smul_eq_zsmul ℝ]
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_smul' {d:Dimensions} (c:ℕ) (q:Scalar d)
+  : ((c • q:Scalar d):Formal) = (c:Formal) * (q:Formal) := by
+  simp [←Nat.cast_smul_eq_nsmul ℝ]
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_smul'' {d:Dimensions} (c:ℤ) (q:Scalar d)
+  : ((c • q:Scalar d):Formal) = (c:Formal) * (q:Formal) := by
+  simp [←Int.cast_smul_eq_zsmul ℝ]
+
+/-- One can multiply a `Scalar d₁` and `Scalar d₂` quantities to obtain a `Scalar (d₁+d₂)` quantity,
+in a manner compatible with multiplication in `Formal`. -/
+instance Scalar.instHMul {d₁ d₂:Dimensions} : HMul (Scalar d₁) (Scalar d₂) (Scalar (d₁ + d₂)) where
+  hMul q₁ q₂ := ⟨q₁.val * q₂.val⟩
+
+@[simp]
+theorem Scalar.val_hMul {d₁ d₂:Dimensions} (q₁:Scalar d₁) (q₂:Scalar d₂) :
+  (q₁ * q₂).val = q₁.val * q₂.val := rfl
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_hMul {d₁ d₂:Dimensions} (q₁:Scalar d₁) (q₂:Scalar d₂) :
+  ((q₁ * q₂:Scalar _):Formal) = (q₁:Formal) * (q₂:Formal) := by
+  simp [toFormal, AddMonoidAlgebra.single_mul_single]
+
+/-- Similarly, one can raise a `Scalar d` quantity to a natural number power `n` to obtain a `Scalar (n • d)` quantity.  One could also implement exponentiation to an integer, but I have elected
+not to do this, implementing an inversion relation instead. -/
+noncomputable def Scalar.pow {d:Dimensions} (q: Scalar d) (n:ℕ) : Scalar (n • d) := ⟨ q.val^n ⟩
+
+/-- One cannot use the Mathlib classes `Pow` or `HPow` here because the output type `Scalar (n • d)` depends on the input `n`.  As the symbol `^` is reserved for such classes, we use the symbol `**` isntead.-/
+infix:80 "**" => Scalar.pow
+
+@[simp]
+theorem Scalar.val_pow {d:Dimensions} (q:Scalar d) (n:ℕ) :
+  (q ** n).val = q.val ^ n := rfl
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_pow {d:Dimensions} (q:Scalar d) (n:ℕ) :
+  ((q ** n):Formal) = (q:Formal) ^ n := by
+  simp [toFormal, AddMonoidAlgebra.single_pow]
+
+/-- We cannot use Mathlib's `Inv` class here or the associated `⁻¹` notation because `Inv` requires the output to be of the same type as the input. -/
+noncomputable def Scalar.inv {d:Dimensions} (q:Scalar d) : Scalar (-d) := ⟨ q.val⁻¹ ⟩
+
+@[simp]
+theorem Scalar.val_inv {d:Dimensions} (q:Scalar d) :
+  q.inv.val = q.val⁻¹ := rfl
+
+instance Scalar.instNeg_inv {d:Dimensions} (q:Scalar d) [h: NeZero q] : NeZero q.inv := by
+  rw [neZero_iff] at h ⊢
+  simp [h]
+
+@[simp]
+theorem Scalar.mul_inv_self {d:Dimensions} (q:Scalar d) [h:NeZero q] : (q:Formal) * (q.inv:Formal) = 1 := by
+  obtain ⟨ v ⟩ := q
+  simp [neZero_iff] at h
+  simp [inv, toFormal, AddMonoidAlgebra.single_mul_single,← Formal.coe_one]
+  congr; field_simp
+
+@[simp]
+theorem Scalar.inv_mul_self {d:Dimensions} (q:Scalar d) [h:NeZero q] :  (q.inv:Formal) * (q:Formal) = 1 := by
+  rw [mul_comm, mul_inv_self]
+
+@[simp]
+theorem Scalar.inv_coe (r:ℝ) :  ((r:Scalar 0).inv:Formal) = ((r⁻¹:ℝ):Scalar 0) := by
+  rw [←toFormal_cast _ (show 0 = -0 by module)]; congr
+
+@[simp]
+theorem Scalar.mul_inv {d₁ d₂:Dimensions} (q₁:Scalar d₁) (q₂:Scalar d₂) : (q₁ * q₂).inv = ((q₁.inv) * (q₂.inv)).cast := by
+  simp [←toFormal_inj, toFormal]; congr 1; ring
+
+@[simp]
+theorem Scalar.pow_inv {d:Dimensions} (q:Scalar d) (n:ℕ) : (q ** n).inv = (q.inv ** n).cast := by
+  simp [←toFormal_inj, toFormal]
+
+/-- Multiplication and inversion combine to give division in the usual fashion.-/
+noncomputable instance Scalar.instHDiv {d₁ d₂:Dimensions} : HDiv (Scalar d₁) (Scalar d₂) (Scalar (d₁ - d₂)) where
+  hDiv q₁ q₂ := ⟨q₁.val / q₂.val⟩
+
+@[simp]
+theorem Scalar.val_hDiv {d₁ d₂:Dimensions} (q₁:Scalar d₁) (q₂:Scalar d₂) :
+  (q₁ / q₂).val = q₁.val / q₂.val := rfl
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_hDiv {d₁ d₂:Dimensions} (q₁:Scalar d₁) (q₂:Scalar d₂) :
+  ((q₁ / q₂:Scalar _):Formal) = (q₁:Formal) * (q₂.inv:Formal) := by
+  simp [toFormal, AddMonoidAlgebra.single_mul_single]
+  congr; module
+
+noncomputable instance Scalar.instHDiv' {d:Dimensions} : HDiv (Scalar d) ℝ  (Scalar d) where
+  hDiv q r := ⟨q.val / r⟩
+
+noncomputable instance Scalar.instHDiv'' {d:Dimensions} : HDiv (Scalar d) ℕ (Scalar d) where
+  hDiv q n := q / (n:ℝ)
+
+noncomputable instance Scalar.instHDiv''' {d:Dimensions} : HDiv (Scalar d) ℤ (Scalar d) where
+  hDiv q n := q / (n:ℝ)
+
+@[simp]
+theorem Scalar.val_hDiv' {d:Dimensions} (q:Scalar d) (r:ℝ) :
+  (q / r).val = q.val / r := rfl
+
+@[simp]
+theorem Scalar.val_hDiv'' {d:Dimensions} (q:Scalar d) (n:ℕ) :
+  (q / n).val = q.val / n := rfl
+
+@[simp]
+theorem Scalar.val_hDiv''' {d:Dimensions} (q:Scalar d) (n:ℤ) :
+  (q / n).val = q.val / n := rfl
+
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_hDiv' {d:Dimensions} (q:Scalar d) (r:ℝ) :
+  ((q / r:Scalar _):Formal) = (q:Formal) * ((r⁻¹:ℝ):Formal) := by
+  simp [toFormal, AddMonoidAlgebra.single_mul_single]
+  congr
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_hDiv'' {d:Dimensions} (q:Scalar d) (n:ℕ) :
+  ((q / n:Scalar _):Formal) = (q:Formal) * (((n:ℝ)⁻¹:ℝ):Formal) := toFormal_hDiv' _ _
+
+@[norm_cast,simp]
+theorem Scalar.toFormal_hDiv''' {d:Dimensions} (q:Scalar d) (n:ℤ) :
+  ((q / n:Scalar _):Formal) = (q:Formal) * (((n:ℝ)⁻¹:ℝ):Formal) := toFormal_hDiv' _ _
+
+
+instance Scalar.instLE (d:Dimensions) : LE (Scalar d) where
+  le x y := x.val ≤ y.val
+
+theorem Scalar.val_le {d:Dimensions} (x y:Scalar d) :
+  x ≤ y ↔ x.val ≤ y.val := by rfl
+
+noncomputable instance Scalar.instLinearOrder (d:Dimensions) : LinearOrder (Scalar d) where
+  le_refl := by simp [val_le]
+  le_trans := by simp [val_le]; intros; order
+  le_antisymm := by simp [val_le, ←val_inj]; intros; order
+  le_total := by simp [val_le]; intros; apply LinearOrder.le_total
+  toDecidableLE := Classical.decRel _
+
+theorem Scalar.val_lt {d:Dimensions} (x y:Scalar d) :
+  x < y ↔ x.val < y.val := by simp only [lt_iff_not_ge, val_le]
+
+noncomputable instance Scalar.instOrderedSMul (d:Dimensions) : IsStrictOrderedModule ℝ (Scalar d) where
+  smul_lt_smul_of_pos_left := by simp [val_lt]; intros; gcongr
+  smul_lt_smul_of_pos_right := by simp [val_lt]; intros; gcongr
+
+-- TODO: add in some `gcongr` lemmas for this order
+
+/-- The standard unit of `Scalar d` is the quantity whose data `val` is equal to 1. -/
+def StandardUnit (d:Dimensions) : Scalar d := ⟨ 1 ⟩
+
+@[simp]
+theorem StandardUnit.val_eq (d:Dimensions) : (StandardUnit d).val = 1 := rfl
+
+instance StandardUnit.inst_NeZero (d:Dimensions) : NeZero (StandardUnit d) := by
+  simp [Scalar.neZero_iff]
+
+@[simp]
+theorem StandardUnit.mul (d₁ d₂:Dimensions) : StandardUnit d₁ * StandardUnit d₂ = StandardUnit (d₁+d₂) := by
+  simp [←Scalar.val_inj]
+
+@[simp]
+theorem StandardUnit.mul' (d₁ d₂:Dimensions) : (StandardUnit d₁:Formal) * (StandardUnit d₂:Formal) = StandardUnit (d₁+d₂) := by
+  rw [←Scalar.toFormal_hMul, mul]
+
+@[simp]
+theorem StandardUnit.pow (d:Dimensions) (n:ℕ) : StandardUnit d ** n = StandardUnit (n • d) := by
+  simp [←Scalar.val_inj]
+
+@[simp]
+theorem StandardUnit.pow' (d:Dimensions) (n:ℕ) : (StandardUnit d:Formal)^n = StandardUnit (n • d) := by
+  rw [←Scalar.toFormal_pow, pow]
+
+@[simp]
+theorem StandardUnit.inv (d:Dimensions) : (StandardUnit d).inv = StandardUnit (-d) := by
+  simp [←Scalar.val_inj]
+
+@[simp]
+theorem StandardUnit.div (d₁ d₂:Dimensions) : StandardUnit d₁ / StandardUnit d₂ = StandardUnit (d₁-d₂) := by
+  simp [←Scalar.val_inj]
+
+/-- `unit.in q` is `q:Scalar d` measured in terms of `unit:Scalar d`. -/
+noncomputable def Scalar.in {d:Dimensions} (unit q:Scalar d) : ℝ := q.val / unit.val
+
+@[simp]
+theorem Scalar.val_in (d:Dimensions) (unit q:Scalar d) : unit.in q = q.val / unit.val := rfl
+
+theorem Scalar.in_def {d:Dimensions} (unit q:Scalar d) [h: NeZero unit] : q = (unit.in q) • unit := by
+  simp [neZero_iff] at h
+  simp [←val_inj]
+  field_simp
+
+@[simp]
+theorem Scalar.in_smul {d:Dimensions} (c:ℝ) (unit q:Scalar d) : unit.in (c • q) = c * unit.in q := by
+  simp; ring
+
+theorem Scalar.in_inj {d:Dimensions} (unit q₁ q₂:Scalar d) [h: NeZero unit] : unit.in q₁ = unit.in q₂ ↔ q₁ = q₂ := by
+  simp [neZero_iff] at h
+  simp [←val_inj, h]
+
+end UnitsSystem
+```
+
+--- File: Foundations/UnitsSystemExamples.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.UnitsSystem
+
+open UnitsSystem
+variable [UnitsSystem]
+
+/- Many algebraic identities involving `Scalar` can be established by first using `simp [←toFormal_inj]`  to coerce to `Formal` and  push coercions inside, then appealing to `ring`.  We give some examples below.
+
+Alternatively, one can "work in coordinates" by using `simp [←val_inj]` in place of `simp [←toFormal_inj]`.
+-/
+
+/-- A cast is needed here because `(d₁+d₂)+d₃` is not definitionally equal to `d₁+(d₂+d₃)`. -/
+theorem UnitsSystem.Scalar.hMul_assoc {d₁ d₂ d₃:Dimensions} (a:Scalar d₁) (b:Scalar d₂) (c:Scalar d₃):
+  a * (b * c) = ((a * b) * c).cast := by
+  simp [←toFormal_inj]; ring
+
+theorem UnitsSystem.Scalar.left_distrib {d₁ d₂:Dimensions} (a:Scalar d₁) (b c:Scalar d₂) :
+  a * (b + c) = (a * b) + (a * c) := by
+  simp [←toFormal_inj]; ring
+
+theorem UnitsSystem.Scalar.right_distrib {d₁ d₂:Dimensions} (a b:Scalar d₁) (c:Scalar d₂) :
+  (a + b) * c = (a * c) + (b * c) := by
+  simp [←toFormal_inj]; ring
+
+/-- A cast is needed here because `2 • d` is not definitionally equal to `d+d`. -/
+theorem UnitsSystem.Scalar.sq_add {d:Dimensions} (a b:Scalar d) : (a+b)**2 = a**2 + (2 • a * b).cast + b**2 := by
+  simp [←toFormal_inj]; ring
+
+/-- An alternate proof based on working in coordinates-/
+theorem UnitsSystem.Scalar.sq_add' {d:Dimensions} (a b:Scalar d) : (a+b)**2 = a**2 + (2 • a * b).cast + b**2 := by
+  simp [←val_inj]; ring
+```
+
+--- File: Foundations/SI.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.UnitsSystem
+import Mathlib.Algebra.Group.MinimalAxioms
+
+
+/-- The SI unit system.  In order to permit fractional dimensions, we allow dimensions to be rational; but then to maintain defeq of various explicit dimensions, we need to unseal the arithmetic operations on the rationals. -/
+@[ext]
+structure SI_dimensions where
+  units_length : ℚ
+  units_mass : ℚ
+  units_time : ℚ
+  units_current : ℚ
+  units_temperature : ℚ
+  units_amount : ℚ
+  units_intensity : ℚ
+deriving DecidableEq
+
+instance SI_dimensions.instZero : Zero SI_dimensions where
+  zero := ⟨0, 0, 0, 0, 0, 0, 0⟩
+
+theorem SI_dimensions.zero_eq : (0:SI_dimensions) = ⟨ 0,0,0,0,0,0,0⟩ := rfl
+
+/-- The addition structure here is simple enough that one gets a lot of definitional equalities, e.g., between `d₁+d₂` and `d₂+d₁` for explicit choices of `d₁` and `d₂`,
+which is convenient as it means we do not need to utilize the `cast` operator much. -/
+instance SI_dimensions.instAdd : Add SI_dimensions where
+  add d₁ d₂ := ⟨d₁.units_length + d₂.units_length,
+                d₁.units_mass + d₂.units_mass,
+                d₁.units_time + d₂.units_time,
+                d₁.units_current + d₂.units_current,
+                d₁.units_temperature + d₂.units_temperature,
+                d₁.units_amount + d₂.units_amount,
+                d₁.units_intensity + d₂.units_intensity
+                ⟩
+
+instance SI_dimensions.instNeg : Neg SI_dimensions where
+  neg d := ⟨-d.units_length, -d.units_mass, -d.units_time, -d.units_current,
+            -d.units_temperature, -d.units_amount, -d.units_intensity⟩
+
+@[simp]
+theorem Rat.neg_eq (q:ℚ) : Rat.neg q = -q := rfl
+
+theorem Rat.add_eq (q r:ℚ) : Rat.add q r = q + r := rfl
+
+instance SI_dimensions.instAddGroup : AddGroup SI_dimensions :=
+AddGroup.ofLeftAxioms
+  (by intros; simp_rw [HAdd.hAdd, Add.add]; simp [add_assoc])
+  (by intros; simp_rw [HAdd.hAdd, Add.add, OfNat.ofNat, Zero.zero]; simp)
+  (by intros; simp_rw [Neg.neg, HAdd.hAdd, Add.add, OfNat.ofNat, Zero.zero]; simp)
+
+instance SI_dimensions.instAddCommGroup : AddCommGroup SI_dimensions where
+  add_comm d₁ d₂ := by
+    simp_rw [HAdd.hAdd, Add.add]; simp [add_comm]
+
+instance SI_dimensions.instSMul : SMul ℚ SI_dimensions where
+  smul q d := ⟨q * d.units_length, q * d.units_mass, q * d.units_time, q * d.units_current,
+                q * d.units_temperature, q * d.units_amount, q * d.units_intensity⟩
+
+instance SI_dimensions.instModule : Module ℚ SI_dimensions where
+  one_smul d := by
+    ext <;> simp [HSMul.hSMul, SMul.smul, One.one]
+  mul_smul q₁ q₂ d := by
+    ext <;> simp [HSMul.hSMul, SMul.smul, mul_assoc]
+  smul_add q d₁ d₂ := by
+    ext <;> simp [HSMul.hSMul, SMul.smul, HAdd.hAdd, Add.add, add_smul] <;> simp [Rat.add_eq, mul_add]
+  smul_zero q := by
+    ext <;> simp [HSMul.hSMul, SMul.smul, zero_eq]
+  add_smul d₁ d₂ q := by
+    ext <;> simp [HAdd.hAdd, Add.add, HSMul.hSMul, SMul.smul, add_smul] <;> simp [Rat.add_eq, add_mul]
+  zero_smul d := by
+    ext <;> simp [HSMul.hSMul, SMul.smul, zero_eq]
+
+abbrev SI : UnitsSystem := {
+  Dimensions := SI_dimensions
+  addCommGroup := SI_dimensions.instAddCommGroup
+}
+
+/-- The SI system will be automatically installed as a global instance by any Lean file that imports this one.  This makes it difficult to use any competing unit system
+simultaneously, but that should be a rare use case. -/
+instance instSI : UnitsSystem := SI
+instance instSI_module : Module ℚ SI.Dimensions := SI_dimensions.instModule
+
+namespace SI
+open UnitsSystem
+
+
+abbrev deca {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ) • q
+abbrev hecto {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^2 • q
+abbrev kilo {d:Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^3 • q
+abbrev mega {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^6 • q
+abbrev giga {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^9 • q
+abbrev tera {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^12 • q
+abbrev peta {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^15 • q
+abbrev exa {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^18 • q
+
+noncomputable abbrev deci {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-1:ℤ) • q
+noncomputable abbrev centi {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-2:ℤ) • q
+noncomputable abbrev milli {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-3:ℤ) • q
+noncomputable abbrev micro {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-6:ℤ) • q
+noncomputable abbrev nano {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-9:ℤ) • q
+noncomputable abbrev pico {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-12:ℤ) • q
+noncomputable abbrev femto {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-15:ℤ) • q
+noncomputable abbrev atto {d: Dimensions} (q : Scalar d) : Scalar d := (10:ℝ)^(-18:ℤ) • q
+
+abbrev Dimensionless := Scalar (0:Dimensions)
+abbrev angle_unit : Dimensions := ⟨0, 0, 0, 0, 0, 0, 0⟩
+abbrev PhysAngle := Scalar angle_unit
+abbrev radian : PhysAngle := StandardUnit _
+
+abbrev length_unit :Dimensions := ⟨1, 0, 0, 0, 0, 0, 0⟩
+abbrev Length := Scalar length_unit
+abbrev meter:Length := StandardUnit _
+
+abbrev mass_unit :Dimensions := ⟨0, 1, 0, 0, 0, 0, 0⟩
+abbrev Mass := Scalar mass_unit
+abbrev kilogram:Mass := StandardUnit _
+
+abbrev time_unit :Dimensions := ⟨0, 0, 1, 0, 0, 0, 0⟩
+abbrev Time := Scalar time_unit
+abbrev second:Time := StandardUnit _
+abbrev minute:Time := 60 • second
+abbrev hour:Time := 60 • minute
+abbrev day:Time := 24 • hour
+abbrev week:Time := 7 • day
+abbrev year:Time := (365.25:ℝ) • day -- average year length, accounting for leap years
+
+
+abbrev current_unit :Dimensions := ⟨0, 0, 0, 1, 0, 0, 0⟩
+abbrev Current := Scalar current_unit
+abbrev ampere:Current := StandardUnit _
+
+abbrev temperature_unit :Dimensions := ⟨0, 0, 0, 0, 1, 0, 0⟩
+abbrev Temperature := Scalar temperature_unit
+abbrev kelvin:Temperature := StandardUnit _
+
+abbrev amount_unit :Dimensions := ⟨0, 0, 0, 0, 0, 1, 0⟩
+abbrev Amount := Scalar amount_unit
+abbrev mole:Amount := StandardUnit _
+
+abbrev intensity_unit :Dimensions := ⟨0, 0, 0, 0, 0, 0, 1⟩
+abbrev Intensity := Scalar intensity_unit
+abbrev candela:Intensity := StandardUnit _
+
+abbrev speed_unit := length_unit - time_unit
+abbrev Speed := Scalar speed_unit
+
+abbrev acceleration_unit := length_unit - (2 • time_unit)
+abbrev Acceleration := Scalar acceleration_unit
+
+abbrev momentum_unit := mass_unit + speed_unit
+abbrev Momentum := Scalar momentum_unit
+
+abbrev energy_unit := mass_unit + (2 • speed_unit)
+abbrev Energy := Scalar energy_unit
+abbrev joule:Energy := StandardUnit _
+
+abbrev force_unit := mass_unit + acceleration_unit
+abbrev Force := Scalar force_unit
+abbrev newton:Force := StandardUnit _
+
+abbrev frequency_unit := -time_unit
+abbrev Frequency := Scalar frequency_unit
+abbrev hertz:Frequency := StandardUnit _
+
+abbrev pressure_unit := force_unit - (2 • length_unit)
+abbrev Pressure := Scalar pressure_unit
+abbrev pascal:Pressure := StandardUnit _
+
+abbrev power_unit := energy_unit - time_unit
+abbrev Power := Scalar power_unit
+abbrev watt:Power := StandardUnit _
+
+abbrev charge_unit := current_unit + time_unit
+abbrev Charge := Scalar charge_unit
+abbrev coulomb:Charge := StandardUnit _
+
+abbrev voltage_unit := energy_unit - charge_unit
+abbrev Voltage := Scalar voltage_unit
+abbrev volt:Voltage := StandardUnit _
+
+abbrev capacitance_unit := charge_unit - voltage_unit
+abbrev Capacitance := Scalar capacitance_unit
+abbrev farad:Capacitance := StandardUnit _
+
+abbrev resistance_unit := voltage_unit - current_unit
+abbrev Resistance := Scalar resistance_unit
+abbrev ohm:Resistance := StandardUnit _
+
+abbrev inductance_unit := voltage_unit - (2 • current_unit)
+abbrev Inductance := Scalar inductance_unit
+abbrev henry:Inductance := StandardUnit _
+
+abbrev magnetic_flux_unit := voltage_unit + time_unit
+abbrev MagneticFlux := Scalar magnetic_flux_unit
+abbrev weber:MagneticFlux := StandardUnit _
+
+abbrev magnetic_flux_density_unit := magnetic_flux_unit - length_unit
+abbrev MagneticFluxDensity := Scalar magnetic_flux_density_unit
+abbrev tesla:MagneticFluxDensity := StandardUnit _
+
+
+abbrev c : Speed := 299792458 • StandardUnit _ -- speed of light in vacuum
+noncomputable abbrev h : Scalar (energy_unit + time_unit) := (6.62607015 * (10:ℝ)^(-34:ℤ)) • StandardUnit _ -- Planck's constant
+noncomputable abbrev e : Charge := (1.602176634 * (10:ℝ)^(-19:ℤ)) • StandardUnit _ -- elementary charge
+noncomputable abbrev ε₀ : Capacitance := (8.854187817 * (10:ℝ)^(-12:ℤ)) • StandardUnit _ -- vacuum permittivity
+noncomputable abbrev μ₀ : Inductance := (4 * Real.pi * (10:ℝ)^(-7:ℤ)) • StandardUnit _ -- vacuum permeability
+noncomputable abbrev g : Acceleration := (9.80665:ℝ) • StandardUnit _ -- standard acceleration of gravity
+noncomputable abbrev k : Scalar (energy_unit + temperature_unit) := (1.380649 * (10:ℝ)^(-23:ℤ)) • StandardUnit _ -- Boltzmann constant
+noncomputable abbrev N_A : Amount := (6.02214076 * (10:ℝ)^(23:ℤ)) • StandardUnit _ -- Avogadro's number
+noncomputable abbrev G : Scalar (3 • length_unit - mass_unit - 2 • time_unit) := (6.67430 * (10:ℝ)^(-11:ℤ)) • StandardUnit _ -- Newton's gravitational constant
+
+end SI
+```
+
+--- File: Foundations/SIDeriv.lean ---
+```lean4
+import Mathlib
+import Aesop
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+open BigOperators Real Nat Topology Filter Rat UnitsSystem SI
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+-- Construct NormedAddCommGroup instance for Scalar d
+-- This defines the metric space structure (norm and distance) for physical quantities
+instance{d:Dimensions}:NormedAddCommGroup (Scalar d):={
+  norm:=fun t=>abs t.val -- Norm is defined as the absolute value of the scalar's magnitude
+  dist_self:=by simp
+  dist_comm:=by
+    simp
+    exact fun x y => abs_sub_comm x.val y.val
+  dist_triangle:=by
+    simp
+    exact fun x y z => abs_sub_le x.val y.val z.val
+  eq_of_dist_eq_zero:=by
+    intro x y hxy
+    simp at hxy
+    refine Scalar.ext_iff.mpr ?_
+    contrapose! hxy;
+    exact sub_ne_zero_of_ne hxy
+}
+
+-- Theorem: Distance between two scalars is the absolute difference of their values
+theorem dist_def{d:Dimensions}(a1 a2:Scalar d):Dist.dist a1 a2=|a1.val-a2.val|:=rfl
+
+-- Theorem: Norm of a scalar is the absolute value of its magnitude
+theorem norm_def{d:Dimensions}(t:(Scalar d)):‖t‖=abs t.val:=rfl
+
+-- Construct NormedSpace instance over ℝ for Scalar d
+-- This allows for scaling physical quantities by real numbers
+instance{d:Dimensions}:NormedSpace ℝ (Scalar d):={
+  norm_smul_le:=by
+    intro a b
+    rw[norm_def,norm_def];simp
+  smul_zero:=fun a => MulActionWithZero.smul_zero a
+  smul_add:=fun a x y => DistribSMul.smul_add a x y
+  add_smul:=fun r s x => Module.add_smul r s x
+  zero_smul:=fun x => zero_smul ℝ x
+}
+
+-- Theorem: Equivalence of open sets between Scalar d and the underlying Real space
+theorem open_set_iff{d:Dimensions}(S:Set (Scalar d)):IsOpen S↔ IsOpen {x:ℝ|⟨x⟩ ∈ S}:=by
+  constructor
+  intro h
+  apply Metric.isOpen_iff.mp at h
+  refine Metric.isOpen_iff.mpr ?_
+  intro x hx
+  simp at hx
+  have hoe:=h (⟨x⟩:Scalar d) hx
+  obtain ⟨e,he1,he2⟩:=hoe
+  use e
+  split_ands
+  exact he1
+  rw[Set.subset_def]
+  intro x1 hx1
+  simp
+  exact he2 hx1
+
+  intro h
+  apply Metric.isOpen_iff.mp at h
+  refine Metric.isOpen_iff.mpr ?_
+  intro x hx
+  have hoe:=h (x.val) hx
+  obtain ⟨e,he1,he2⟩:=hoe
+  use e
+  split_ands
+  exact he1
+  rw[Set.subset_def]
+  intro x1 hx1
+  suffices x1.val∈ {(x:ℝ)|(⟨x⟩:Scalar d)∈ S} by
+    simp at this
+    exact this
+  simp at hx1
+  exact he2 hx1
+
+-- Theorem: The mapping from Scalar d to its Real value is differentiable over ℝ
+theorem differentiable_real_cast{d:Dimensions}:Differentiable ℝ (fun (t:(Scalar d))=>t.val):=by
+  rw[Differentiable]
+  intro x
+  rw[DifferentiableAt]
+
+  -- Define the derivative as a bounded linear map f
+  let f: (Scalar d) →L[ℝ] ℝ:={
+    toFun:=(fun t=>t.val)
+    map_add':=by
+      intro x y
+      exact rfl
+    map_smul':=by
+      intro m x
+      simp
+    cont:={
+      isOpen_preimage:=by
+        intro s hs
+        refine (open_set_iff ((fun t => t.val) ⁻¹' s)).mpr ?_
+        simp
+        exact hs
+    }
+  }
+
+  have hf:∀x:(Scalar d) , f x=x.val:=by
+    intro x;exact rfl
+
+  use f
+  rw[HasFDerivAt]
+  refine { isLittleOTVS := ?_ }
+  -- Prove the remainder term is zero
+  have hsimp:(fun x' => x'.val - x.val - f (x' - x))=0:=by
+    refine funext ?_
+    intro x'
+    rw[hf]
+    simp
+  rw[hsimp]
+  exact Asymptotics.IsLittleOTVS.zero (fun x' => x' - x) (𝓝 x)
+
+-- Theorem: The physical lifting (wrapping ℝ into Scalar d) is differentiable
+theorem isdifferentiable_phys_lift{d:Dimensions}:
+  Differentiable ℝ (fun (t:ℝ)=>(⟨t⟩:(Scalar d))):=by
+  rw[Differentiable]
+  intro x
+  rw[DifferentiableAt]
+
+  let f: ℝ →L[ℝ] (Scalar d) :={
+    toFun:=(fun t=>(⟨t⟩:(Scalar d)))
+    map_add':=by
+      intro x y
+      exact rfl
+    map_smul':=by
+      intro m x1
+      simp
+      exact rfl
+    cont:={
+      isOpen_preimage:=by
+        intro s hs
+        apply (open_set_iff s).mp at hs
+        exact hs
+    }
+  }
+
+  have hf:∀x:ℝ , f x=(⟨x⟩:(Scalar d)):=by
+    intro x;exact rfl
+
+  use f
+  rw[HasFDerivAt]
+  refine { isLittleOTVS := ?_ }
+
+  have hsimp:(fun (x':ℝ) => ((⟨x'⟩:(Scalar d)) - (⟨x⟩:(Scalar d)) - f (x' - x)))=0:=by
+    refine funext ?_
+    intro x'
+    rw[hf]
+    simp
+    exact sub_self ((⟨x'⟩:(Scalar d)) - (⟨x⟩:(Scalar d)))
+
+  rw[hsimp]
+  exact Asymptotics.IsLittleOTVS.zero (fun x' => x' - x) (𝓝 x)
+
+variable (K:Type*)[NormedAddCommGroup K][NormedSpace ℝ K]
+
+-- Theorem: Composition of two differentiable functions is differentiable
+theorem differ3(f:ℝ → ℝ)(g:ℝ → K)(h1:Differentiable ℝ f)(h2:Differentiable ℝ g):
+  Differentiable ℝ (g∘ f):=by
+  exact Differentiable.comp h2 h1
+
+-- Definition: Lift a real function f to a mapping between physical scalars
+def physlift(d1 d2:Dimensions)(f:ℝ→ ℝ):Scalar d1→ Scalar d2:=(fun t => ⟨f t.val⟩)
+
+-- Definition: Cast a physical mapping to a real function
+def mathcast{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2):ℝ → ℝ:= (fun t=> (f ⟨t⟩).val)
+
+-- Definitional lemmas for physlift and mathcast
+theorem physlift_def(d1 d2:Dimensions)(f:ℝ→ ℝ):
+  physlift d1 d2 f=(fun t => ⟨f t.val⟩):=rfl
+
+theorem mathcast_def{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2):
+  mathcast f=(fun t=> (f ⟨t⟩).val):=rfl
+
+-- Theorem: Two physical functions are equal if and only if their mathcasts are equal
+theorem physfunc_eq_iff{d1 d2:Dimensions}(f1 f2:Scalar d1→ Scalar d2):f1=f2 ↔ mathcast f1=mathcast f2:=by
+  constructor
+  intro h
+  exact congrArg mathcast h
+  intro h
+  refine funext ?_
+  intro x
+  refine Scalar.ext_iff.mpr ?_
+  have h1:(f1 x).val=(mathcast f1) x.val:=rfl
+  have h2:(f2 x).val=(mathcast f2) x.val:=rfl
+  rw[h1,h2,h]
+
+-- Theorem: mathcast and physlift are inverses (1)
+theorem lift_cast_inverse(d1 d2:Dimensions)(f:ℝ→ ℝ):
+  mathcast (physlift d1 d2 f)=f:=by
+  refine funext ?_
+  intro x
+  rw[physlift_def,mathcast_def]
+
+-- Theorem: mathcast and physlift are inverses (2)
+theorem cast_lift_inverse{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2):
+  physlift d1 d2 (mathcast f)=f:=by
+  refine funext ?_
+  intro x
+  rw[physlift_def,mathcast_def]
+
+-- Theorem: Differentiability of a lifted physical function
+theorem physlift_dif(f:ℝ → ℝ)(d1 d2:Dimensions)(h:Differentiable ℝ f):
+  Differentiable ℝ (physlift d1 d2 f):=by
+  have hcomp:(physlift d1 d2 f)=(fun (t:ℝ)=>(⟨t⟩:Scalar d2))∘ f ∘ (fun t=>t.val):=by
+    rw[physlift_def]
+    refine funext ?_
+    intro x
+    simp
+
+  rw[hcomp]
+  refine Differentiable.comp ?_ ?_
+  exact isdifferentiable_phys_lift
+  refine Differentiable.comp h ?_
+  exact differentiable_real_cast
+
+-- Theorem: Differentiability of a casted math function
+theorem mathcast_dif{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2)(h:Differentiable ℝ f):
+  Differentiable ℝ (mathcast f):=by
+  have hcomp:(mathcast f)=(fun t=>t.val)∘ f ∘ (fun t=>(⟨t⟩:(Scalar d1))):=by
+    rw[mathcast_def]
+    refine funext ?_
+    intro x
+    simp
+
+  rw[hcomp]
+  refine Differentiable.comp ?_ ?_
+  exact differentiable_real_cast
+  refine Differentiable.comp h ?_
+  exact isdifferentiable_phys_lift
+
+-- Definition: Physical derivative.
+-- The output dimension is the difference between the codomain and domain dimensions.
+noncomputable def physderiv{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2):Scalar d1→ Scalar (d2-d1):=
+  (fun x=>⟨deriv (mathcast f) x.val⟩)
+
+theorem physderiv_def{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2):
+  physderiv f=(fun x=>⟨deriv (mathcast f) x.val⟩):=rfl
+
+-- Theorem: Casting a physical derivative yields the math derivative of the casted function
+theorem deriv_mathphys{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2):
+  mathcast (physderiv f)=deriv (mathcast f):=rfl
+
+-- Definition: Pointwise multiplication of two physical mappings (Dimensions add up)
+def physmapmul{d1 d2 d3:Dimensions}(f1:Scalar d1→ Scalar d2)(f2:Scalar d1→ Scalar d3):Scalar d1→ Scalar (d2+d3):=
+  fun x=>(f1 x)*(f2 x)
+
+theorem phymapmul_def{d1 d2 d3:Dimensions}(f1:Scalar d1→ Scalar d2)(f2:Scalar d1→ Scalar d3):
+  physmapmul f1 f2=fun x=>(f1 x)*(f2 x):=rfl
+
+-- Definition: Pointwise division of two physical mappings (Dimensions subtract)
+noncomputable def physmapdiv{d1 d2 d3:Dimensions}(f1:Scalar d1→ Scalar d2)(f2:Scalar d1→ Scalar d3):Scalar d1→ Scalar (d2-d3):=
+  fun x=>((f1 x)/(f2 x))
+
+theorem phymapmdiv_def{d1 d2 d3:Dimensions}(f1:Scalar d1→ Scalar d2)(f2:Scalar d1→ Scalar d3):
+  physmapdiv f1 f2=fun x=>((f1 x)/(f2 x)):=rfl
+
+-- Definition: Multiplication of a physical mapping by a constant scalar
+def physmapsmul{d1 d2 d3:Dimensions}(f:Scalar d1→ Scalar d3)(a: Scalar d2):Scalar d1→ Scalar (d2+d3):=
+  fun x=>a*(f x)
+
+theorem phymapsmul_def{d1 d2 d3:Dimensions}(f:Scalar d1→ Scalar d2)(a: Scalar d3):
+  physmapsmul f a=fun x=>a*(f x):=rfl
+
+-- Theorem: Mathcast of a scalar-multiplied map matches the scalar action on the math function
+theorem smul_cast{d1 d2 d3:Dimensions}(f:Scalar d1→ Scalar d3)(a: Scalar d2):
+  mathcast (physmapsmul f a)=a.val • (mathcast f):=rfl
+
+-- Definition: Change the dimension labels of a physical mapping if the dimensions are equal
+def physmapcast{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2)(d3 d4:Dimensions)(h1:d1=d3)(h2:d2=d4):Scalar d3→ Scalar d4:=
+  fun a=>((f (a.cast h1)).cast h2.symm)
+
+theorem phymapcast_def{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2)(d3 d4:Dimensions)(h1:d1=d3)(h2:d2=d4):
+  physmapcast f d3 d4 h1 h2=fun (a:(Scalar d3))=> ((f (a.cast h1)).cast h2.symm):=rfl
+
+-- Theorem: Dimension casting does not change the underlying mathematical function
+theorem map_cast_matheq{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2)(d3 d4:Dimensions)(h1:d1=d3)(h2:d2=d4):
+  mathcast f=mathcast (physmapcast f d3 d4 h1 h2):=rfl
+-- Definition: Physical lifting function that "elevates" a real function f to map from ℝ to a Scalar d1
+-- Purpose: Takes a real number, applies f, and wraps the result as a physical scalar with dimension d1
+def physlift'(d1:Dimensions)(f:ℝ→ ℝ):ℝ→ Scalar d1:=(fun t => ⟨f t⟩)
+
+-- Definition: Mathematical cast function that converts a physical mapping f back to a real function
+-- Purpose: Extracts the underlying numerical value from a physical scalar result
+def mathcast'{d1:Dimensions}(f:ℝ→ Scalar d1):ℝ → ℝ:= (fun t=> (f t).val)
+
+-- Theorem: Definitional equality for physlift'
+theorem physlift_def'(d1:Dimensions)(f:ℝ→ ℝ):
+  physlift' d1 f=(fun t => ⟨f t⟩):=rfl
+
+-- Theorem: Definitional equality for mathcast'
+theorem mathcast_def'{d1:Dimensions}(f:ℝ→ Scalar d1):
+  mathcast' f=(fun t=> (f t).val):=rfl
+
+-- Theorem: Two physical functions are equal if and only if their mathematical casts are equal
+theorem physfunc_eq_iff'{d1:Dimensions}(f1 f2:ℝ → Scalar d1):f1=f2 ↔ mathcast' f1=mathcast' f2:=by
+  constructor
+  intro h
+  exact congrArg mathcast' h
+  intro h
+  refine funext ?_
+  intro x
+  refine Scalar.ext_iff.mpr ?_
+  have h1:(f1 x).val=(mathcast' f1) x:=rfl
+  have h2:(f2 x).val=(mathcast' f2) x:=rfl
+  rw[h1,h2,h]
+
+-- Theorem: Inverse property 1 - Casting a lifted function returns the original real function
+theorem lift_cast_inverse'{d1:Dimensions}(f:ℝ→ ℝ):
+  mathcast' (physlift' d1 f)=f:=by
+  refine funext ?_
+  intro x
+  rw[physlift_def', mathcast_def']
+
+-- Theorem: Inverse property 2 - Lifting a casted function returns the original physical mapping
+theorem cast_lift_inverse'{d1:Dimensions}(f:ℝ → Scalar d1):
+  physlift' d1 (mathcast' f)=f:=by
+  refine funext ?_
+  intro x
+  rw[physlift_def', mathcast_def']
+
+-- Theorem: Differentiability of the physical lift
+-- If the underlying real function f is differentiable, then its physical lift is also differentiable
+theorem physlift_dif'(f:ℝ → ℝ)(d1:Dimensions)(h:Differentiable ℝ f):
+  Differentiable ℝ (physlift' d1 f):=by
+  -- Express physlift' as a composition of the wrapping function and f
+  have hcomp:(physlift' d1 f)=(fun (t:ℝ)=>(⟨t⟩:Scalar d1))∘ f :=by
+    rw[physlift_def']
+    refine funext ?_
+    intro x
+    simp
+
+  rw[hcomp]
+  refine Differentiable.comp ?_ ?_
+  exact isdifferentiable_phys_lift -- The outer wrapping (ℝ → Scalar) is differentiable
+  exact h
+
+-- Theorem: Differentiability of the mathematical cast
+-- If the physical mapping f is differentiable, then its numerical extraction is also differentiable
+theorem mathcast_dif'{d1 :Dimensions}(f:ℝ→ Scalar d1)(h:Differentiable ℝ f):
+  Differentiable ℝ (mathcast' f):=by
+  -- Express mathcast' as a composition of the extraction (val) and f
+  have hcomp:(mathcast' f)=(fun t=>t.val)∘ f :=by
+    rw[mathcast_def']
+    refine funext ?_
+    intro x
+    simp
+
+  rw[hcomp]
+  refine Differentiable.comp ?_ ?_
+  exact differentiable_real_cast -- The outer extraction (Scalar → ℝ) is differentiable
+  exact h
+
+-- Definition: Physical derivative for functions mapping ℝ to a Scalar d1
+-- Implemented by casting to math, deriving in ℝ, and wrapping the result back into a Scalar
+noncomputable def physderiv'{d1:Dimensions}(f:ℝ → Scalar d1):ℝ → Scalar d1:=
+  (fun x=>⟨deriv (mathcast' f) x⟩)
+
+-- Theorem: Definitional lemma for physderiv'
+theorem physderiv_def'{d1:Dimensions}(f:ℝ → Scalar d1):
+  physderiv' f=(fun x=>⟨deriv (mathcast' f) x⟩):=rfl
+
+-- Theorem: Relationship between physical and mathematical derivatives
+theorem deriv_mathphys'{d1:Dimensions}(f:ℝ → Scalar d1):
+  mathcast' (physderiv' f)=deriv (mathcast' f):=rfl
+
+-- Definition: Pointwise multiplication of two physical scalar functions (Dimensions are added)
+def physmapmul'{d1 d2:Dimensions}(f1:ℝ → Scalar d1)(f2:ℝ → Scalar d2):ℝ→ Scalar (d1+d2):=
+  fun x=>(f1 x)*(f2 x)
+
+-- Theorem: Definitional lemma for physmapmul'
+theorem physmapmul_def'{d1 d2:Dimensions}(f1:ℝ → Scalar d1)(f2:ℝ → Scalar d2):
+  physmapmul' f1 f2=fun x=>(f1 x)*(f2 x):=rfl
+
+-- Definition: Pointwise division of two physical scalar functions (Dimensions are subtracted)
+noncomputable def physmapdiv'{d1 d2:Dimensions}(f1:ℝ → Scalar d1)(f2:ℝ → Scalar d2):ℝ→ Scalar (d1-d2):=
+  fun x=>((f1 x)/(f2 x))
+
+-- Theorem: Definitional lemma for physmapdiv'
+theorem phymapmdiv_def'{d1 d2:Dimensions}(f1:ℝ → Scalar d1)(f2:ℝ → Scalar d2):
+  physmapdiv' f1 f2=fun x=>((f1 x)/(f2 x)):=rfl
+
+-- Definition: Multiplication of a physical function by a constant scalar
+def physmapsmul'{d1 d2:Dimensions}(f:ℝ → Scalar d1)(a: Scalar d2):ℝ→ Scalar (d1+d2):=
+  fun x=>(f x)*a
+
+-- Theorem: Definitional lemma for physmapsmul'
+theorem phymapsmul_def'{d1 d2:Dimensions}(f:ℝ → Scalar d1)(a: Scalar d2):
+  physmapsmul' f a=fun x=>(f x)*a:=rfl
+
+-- Theorem: The mathcast of a scalar multiplication equals the scalar value times the function's mathcast
+theorem smul_cast'{d1 d2:Dimensions}(f:ℝ→ Scalar d1)(a: Scalar d2):
+  mathcast' (physmapsmul' f a)=a.val • (mathcast' f):=by
+  rw[phymapsmul_def', mathcast_def', mathcast_def']
+  refine Eq.symm (funext ?_)
+  intro x
+  simp
+  rw[mul_comm]
+
+-- Definition: Physical dimension cast for functions mapping ℝ to Scalars
+-- Allows changing the dimension label d1 to d2 given a proof h that d1 = d2
+def physmapcast'{d1 d2:Dimensions}(f:ℝ→ Scalar d1)(h:d1=d2):ℝ→ Scalar d2:=
+  fun a=>((f a).cast h.symm)
+
+-- Theorem: Definitional lemma for physmapcast'
+theorem phymapcast_def'{d1 d2:Dimensions}(f:ℝ→ Scalar d1)(h:d1=d2):
+  physmapcast' f h = fun a => ((f a).cast h.symm):=rfl
+
+-- Theorem: Dimension casting does not change the underlying mathematical values
+theorem map_cast_matheq'{d1 d2:Dimensions}(f:Scalar d1→ Scalar d2)(d3 d4:Dimensions)(h1:d1=d3)(h2:d2=d4):
+  mathcast f = mathcast (physmapcast f d3 d4 h1 h2):=rfl
+-- Definition: Physical lifting function for mapping from a physical Scalar d1 to ℝ
+-- Purpose: Takes a scalar, extracts its real value, and applies the real function f
+def physlift''(d1:Dimensions)(f:ℝ→ ℝ):Scalar d1 → ℝ :=(fun t => f t.val)
+
+-- Definition: Mathematical cast function for mappings from Scalar d1 to ℝ
+-- Purpose: Converts the domain from Scalar d1 to ℝ by wrapping the input t as ⟨t⟩
+def mathcast''{d1:Dimensions}(f:Scalar d1 → ℝ):ℝ → ℝ:= (fun t=> (f ⟨t⟩))
+
+-- Theorem: Definitional equality for physlift''
+theorem physlift_def''(d1:Dimensions)(f:ℝ→ ℝ):
+  physlift'' d1 f=(fun t => f t.val):=rfl
+
+-- Theorem: Definitional equality for mathcast''
+theorem mathcast_def''{d1:Dimensions}(f:Scalar d1→ ℝ):
+  mathcast'' f=(fun t=> (f ⟨t⟩)):=rfl
+
+-- Theorem: Equality of two physical-to-real functions based on their mathematical casts
+theorem physfunc_eq_iff''{d1:Dimensions}(f1 f2:Scalar d1 → ℝ ):f1=f2 ↔ mathcast'' f1=mathcast'' f2:=by
+  constructor
+  intro h
+  exact congrArg mathcast'' h
+  intro h
+  refine funext ?_
+  intro x
+  have h1:(f1 x)=(mathcast'' f1) x.val:=rfl
+  have h2:(f2 x)=(mathcast'' f2) x.val:=rfl
+  rw[h1,h2,h]
+
+-- Theorem: Inverse property 1 - Casting a lifted function returns the original real function
+theorem lift_cast_inverse''(d1:Dimensions)(f:ℝ→ ℝ):
+  mathcast'' (physlift'' d1 f)=f:=by
+  refine funext ?_
+  intro x
+  rw[physlift_def'', mathcast_def'']
+
+-- Theorem: Inverse property 2 - Lifting a casted function returns the original physical mapping
+theorem cast_lift_inverse''{d1:Dimensions}(f:Scalar d1→ ℝ):
+  physlift'' d1 (mathcast'' f)=f:=by
+  refine funext ?_
+  intro x
+  rw[physlift_def'', mathcast_def'']
+
+-- Theorem: Differentiability of the physical lift (Scalar d1 → ℝ)
+-- If f is differentiable, then its lift from a physical domain is differentiable
+theorem physlift_dif''(f:ℝ → ℝ)(d1:Dimensions)(h:Differentiable ℝ f):
+  Differentiable ℝ (physlift'' d1 f):=by
+  -- Express physlift'' as a composition of f and the extraction function (val)
+  have hcomp:(physlift'' d1 f)=f ∘ (fun t => t.val):=by
+    rw[physlift_def'']
+    refine funext ?_
+    intro x
+    simp
+
+  rw[hcomp]
+  refine Differentiable.comp ?_ ?_
+  exact h
+  exact differentiable_real_cast -- The extraction (Scalar → ℝ) is differentiable
+
+-- Theorem: Differentiability of the mathematical cast
+-- If the physical-to-real mapping f is differentiable, its cast is differentiable
+theorem mathcast_dif''{d1 :Dimensions}(f:Scalar d1 → ℝ)(h:Differentiable ℝ f):
+  Differentiable ℝ (mathcast'' f):=by
+  -- Express mathcast'' as a composition of f and the wrapping function (⟨t⟩)
+  have hcomp:(mathcast'' f)= f ∘ (fun t=>⟨t⟩):=by
+    rw[mathcast_def'']
+    refine funext ?_
+    intro x
+    simp
+
+  rw[hcomp]
+  refine Differentiable.comp ?_ ?_
+  exact h
+  exact isdifferentiable_phys_lift -- The wrapping (ℝ → Scalar) is differentiable
+
+-- Definition: Physical derivative for functions mapping Scalar d1 to ℝ
+-- The output dimension is -d1 (the "per-unit" dimension)
+noncomputable def physderiv''{d1:Dimensions}(f:Scalar d1 → ℝ):Scalar d1 → Scalar (-d1):=
+  (fun x=>⟨deriv (mathcast'' f) x.val⟩)
+
+-- Theorem: Definitional lemma for physderiv''
+theorem physderiv_def''{d1:Dimensions}(f:Scalar d1 → ℝ):
+  physderiv'' f=(fun x=>⟨deriv (mathcast'' f) x.val⟩):=rfl
+
+-- Theorem: Relationship between physical and mathematical derivatives for Scalar-to-ℝ functions
+theorem deriv_mathphys''{d1:Dimensions}(f:Scalar d1→ ℝ):
+  mathcast (physderiv'' f)=deriv (mathcast'' f):=rfl
+
+-- Definition: Multiplication of two functions mapping ℝ to Scalar d1
+-- Resulting dimension is 2 • d1
+def physmapmul''{d1:Dimensions}(f1:ℝ → Scalar d1)(f2:ℝ → Scalar d1):ℝ→ Scalar (2 • d1):=
+  fun x=>(((f1 x)*(f2 x)).cast (by module))
+
+-- Theorem: Definitional lemma for physmapmul''
+theorem physmapmul_def''{d1:Dimensions}(f1:ℝ → Scalar d1 )(f2:ℝ → Scalar d1):
+  physmapmul'' f1 f2=(fun x=>(((f1 x)*(f2 x)).cast (by module))):=rfl
+
+-- Definition: Division of two functions mapping Scalar d1 to ℝ (Dimensionality cancels to ℝ)
+noncomputable def physmapdiv''{d1:Dimensions}(f1:Scalar d1 → ℝ)(f2:Scalar d1 → ℝ):ℝ→ ℝ:=
+  fun x=>((f1 ⟨x⟩)/(f2 ⟨x⟩))
+
+-- Theorem: Definitional lemma for physmapdiv''
+theorem phymapmdiv_def''{d1:Dimensions}(f1:Scalar d1 → ℝ)(f2:Scalar d1 → ℝ):
+  physmapdiv'' f1 f2=fun x=>((f1 ⟨x⟩)/(f2 ⟨x⟩)):=rfl
+
+-- Definition: Scalar multiplication of a physical mapping by a constant physical Scalar d2
+def physmapsmul''{d1 d2:Dimensions}(f:Scalar d1 → ℝ)(a: Scalar d2):Scalar d1→ Scalar d2:=
+  fun x=>(f x) • a
+
+-- Theorem: Definitional lemma for physmapsmul''
+theorem phymapsmul_def''{d1 d2:Dimensions}(f:Scalar d1 → ℝ)(a: Scalar d2):
+  physmapsmul'' f a=fun x=>(f x) • a:=rfl
+
+-- Theorem: The mathcast of a scalar-multiplied map matches the scalar action on the mathcast function
+theorem smul_cast''{d1 d2:Dimensions}(f:Scalar d1 → ℝ )(a: Scalar d2):
+  mathcast (physmapsmul'' f a)=a.val • (mathcast'' f):=by
+  rw[phymapsmul_def'', mathcast_def'', mathcast_def]
+  refine Eq.symm (funext ?_)
+  intro x
+  simp
+  rw[mul_comm]
+
+-- Definition: Physical dimension cast for the input domain (Scalar d1 to Scalar d2)
+def physmapcast''{d1 d2:Dimensions}(f:Scalar d1 → ℝ)(h:d1=d2):Scalar d2→ ℝ:=
+  fun a=>(f (a.cast h))
+
+-- Theorem: Definitional lemma for physmapcast''
+theorem phymapcast_def''{d1 d2:Dimensions}(f:Scalar d1 → ℝ)(h:d1=d2):
+  physmapcast'' f h=fun a=> (f (a.cast h)):=rfl
+
+/--             Basic Kinematics                      -/
+
+-- First, define a general structure for "One-Dimensional Motion" as a core building block
+structure OneDimMotion where
+  -- Position
+  pos : Time → Length
+  differentiable_pos : Differentiable ℝ pos
+  -- Velocity
+  vel : Time → Speed := physderiv pos
+  differentiable_vel : Differentiable ℝ vel
+  -- Acceleration
+  acc : Time → Acceleration := physderiv vel
+  -- Record of the component-wise net external force
+  F : Finset (Time → Force)
+
+-- Define points in each dimension using a compositional approach
+structure point_1d where
+  m : Mass
+  motion : OneDimMotion
+  -- Newton's Second Law: F = ma
+  Newton : ∀ t, m * motion.acc t = ∑ f ∈ motion.F, f t
+  -- Mapping from physical time to real position value
+  point_toreal : Time → ℝ := fun t => (motion.pos t).val
+
+structure point_2d where
+  m : Mass
+  motion_x : OneDimMotion
+  motion_y : OneDimMotion
+  Newtonx : ∀ t, m * motion_x.acc t = ∑ f ∈ motion_x.F, f t
+  Newtony : ∀ t, m * motion_y.acc t = ∑ f ∈ motion_y.F, f t
+  -- Mapping from physical time to a real (x, y) coordinate pair
+  point_toreal : Time → ℝ × ℝ := fun t => ((motion_x.pos t).val, (motion_y.pos t).val)
+
+structure point_3d where
+  m : Mass
+  motion_x : OneDimMotion
+  motion_y : OneDimMotion
+  motion_z : OneDimMotion
+  Newtonx : ∀ t, m * motion_x.acc t = ∑ f ∈ motion_x.F, f t
+  Newtony : ∀ t, m * motion_y.acc t = ∑ f ∈ motion_y.F, f t
+  Newtonz : ∀ t, m * motion_z.acc t = ∑ f ∈ motion_z.F, f t
+  -- Mapping from physical time to a real (x, y, z) coordinate triplet
+  point_toreal : Time → ℝ × ℝ × ℝ := fun t => ((motion_x.pos t).val, (motion_y.pos t).val, (motion_z.pos t).val)
+
+structure isolate_system_1d where
+  points : Finset point_1d
+  -- The sum of internal forces is 0
+  sumforce : ∀ t, ∑ p ∈ points, (∑ f ∈ p.motion.F, f t) = 0
+  -- Conservation of momentum (equivalent to net external force being 0)
+  summomentum : ∀ t, ∑ p ∈ points, (p.m * p.motion.vel t) = ∑ p ∈ points, (p.m * p.motion.vel 0)
+
+structure isolate_system_2d where
+  points : Finset point_2d
+  -- Internal forces sum to 0 in X-axis
+  sumforce_x : ∀ t, ∑ p ∈ points, (∑ f ∈ p.motion_x.F, f t) = 0
+  -- Momentum conservation in X-axis
+  summomentum_x : ∀ t, ∑ p ∈ points, (p.m * p.motion_x.vel t) = ∑ p ∈ points, (p.m * p.motion_x.vel 0)
+  -- Internal forces sum to 0 in Y-axis
+  sumforce_y : ∀ t, ∑ p ∈ points, (∑ f ∈ p.motion_y.F, f t) = 0
+  -- Momentum conservation in Y-axis
+  summomentum_y : ∀ t, ∑ p ∈ points, (p.m * p.motion_y.vel t) = ∑ p ∈ points, (p.m * p.motion_y.vel 0)
+
+structure isolate_system_3d where
+  points : Finset point_3d
+  -- Internal forces sum to 0 in X-axis
+  sumforce_x : ∀ t, ∑ p ∈ points, (∑ f ∈ p.motion_x.F, f t) = 0
+  -- Momentum conservation in X-axis
+  summomentum : ∀ t, ∑ p ∈ points, (p.m * p.motion_x.vel t) = ∑ p ∈ points, (p.m * p.motion_x.vel 0)
+  -- Internal forces sum to 0 in Y-axis
+  sumforce_y : ∀ t, ∑ p ∈ points, (∑ f ∈ p.motion_y.F, f t) = 0
+  -- Momentum conservation in Y-axis
+  summomentum_y : ∀ t, ∑ p ∈ points, (p.m * p.motion_y.vel t) = ∑ p ∈ points, (p.m * p.motion_y.vel 0)
+  -- Internal forces sum to 0 in Z-axis
+  sumforce_z : ∀ t, ∑ p ∈ points, (∑ f ∈ p.motion_z.F, f t) = 0
+  -- Momentum conservation in Z-axis
+  summomentum_z : ∀ t, ∑ p ∈ points, (p.m * p.motion_z.vel t) = ∑ p ∈ points, (p.m * p.motion_z.vel 0)
+
+/--                 Rigid Body Mechanics                     -/
+
+-- Define an axis in 3D space as an affine line
+class axis where
+  A : Set (ℝ × ℝ × ℝ)
+  affine : ∃ a, ∃ v, (v ≠ 0) ∧ (∀ x : A, ∃ t : ℝ, (x : (ℝ × ℝ × ℝ)) = a + t • v)
+
+-- Distance from a point to an axis
+noncomputable def distance_ptl(a : ℝ × ℝ × ℝ)(l : axis) : ℝ := sInf {r : ℝ | ∃ b : l.A, dist a b = r}
+
+structure rotating_rigid_body where
+  points : Set point_3d
+  -- Set of real-coordinate points occupied by the rigid body at time t
+  points_toreal : Time → Set (ℝ × ℝ × ℝ) := fun t => {x | ∃! a : points, x = (a : point_3d).point_toreal t}
+  -- Mass distribution function
+  Mass' : ℝ × ℝ × ℝ → Mass
+  -- Angular velocity (dimension: 1/T)
+  ang_vel : Time → Scalar (-time_unit)
+  -- Constraint: mass is zero outside the body's initial volume
+  h : ∀ x, x ∉ points_toreal 0 → Mass' x = 0
+
+-- Calculation of Moment of Inertia relative to an axis A
+noncomputable def rotation_inertia(A : axis)(B : rotating_rigid_body) : Scalar (mass_unit + 2 • length_unit) :=
+  ⟨∫ x in (B.points_toreal 0), (distance_ptl x A)^2 * ((B.Mass' x)).val⟩
+```
+
+--- File: Foundations/SIExamples.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+import Mathlib.MeasureTheory.Integral.IntervalIntegral.Basic
+import Mathlib.MeasureTheory.Integral.IntervalIntegral.FundThmCalculus
+import Mathlib.MeasureTheory.Integral.IntervalIntegral.IntegrationByParts
+
+namespace SI
+open UnitsSystem
+
+/- This is needed to keep dimensions such as `Length` and `Speed * Time` defeq to each other -/
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+
+
+variable (m:Mass) (v v_0:Speed) (F:Force) (p:Momentum) (E:Energy) (h h_0 h_1:Length) (t:Time) (a:Acceleration)
+
+
+#check h = (2.3:ℚ) • (-a * t**2) / 1 + v * t
+
+#check F = m * a
+#check p = m * v
+#check h = - a * t**2 / 2 + v * t
+#check h = - a * t**2 / 2 + v * t /2
+#check h = - a * t**2 / 2 + v * t /2 + a * t**2
+#check h = - a * t**2 / 2 +a * t**2 + v * t /2
+#check h = - a * t**2 / 2 +(a * t**2 + v * t /2)
+-- #check meter.in h = meter.in(- a * t**2 / 2 + v * t + a * t**2)
+-- #check h = - a * t**2 / 2 + a * t**2 + v * t
+-- #check h = a * t**2 - a * t**2 / 2 + v * t
+-- #check h = a * t**2 + v * t - a * t**2 / 2
+-- #check h = (v * t : Formal) - a * t**2 / 2 + a * t**2
+-- #check h = ((v * t + a * t**2 : Formal )- a * t**2 / 2 : Formal)
+#check h_1 = - a * t**2 +a * t**2 / 2
+#check h_0 =  v * t
+#check h = h_1 + h_0
+-- #check h = - a * t**2 +a * t**2 / 2 + v * t
+#check h = - a * t**2 / 2 + v * t - a * t**2 / 2
+#check h = - a * t**2 / 2 + v * t - a * t**2 / 2 + v * t
+#check E = 1 • kilogram * c**2
+#check E = m * v**2 / 2 + m * g * h
+#check v = v_0 - a * t / 2
+#check v_0 = - a * t / 2 + v
+#check v_0 = - a * t + v / 2
+-- #check v_0 = - a * t + v
+-- #check E = m * c**3  -- fails to typecheck
+-- #check m + v -- fails to typecheck
+
+
+
+example (hv : v = 60 • kilo meter / hour) : (StandardUnit _).in v = 50/(3:ℝ) := by
+  simp [←Scalar.val_inj, hour, minute, kilo, meter, second, hv]
+  norm_num
+
+example (first_law : F = m * a) (hm : m = 2 • kilogram) (ha : a = 3 • meter / second**2) : F = 6 • newton := by
+  simp [←Scalar.val_inj, first_law, hm, ha, kilogram, meter, second, newton]
+  norm_num
+
+example (kinetic: E = m * v**2 / 2) (hm : m = 2 • kilogram) (hv : v = 3 • meter / second) : joule.in E = 9 := by
+  simp [←Scalar.val_inj, kinetic, hm, hv, kilogram, meter, second, joule]
+  norm_num
+
+example (ht : t = 3 • hour) : minute.in t = 180 := by
+  simp [←Scalar.val_inj, hour, minute, ht]
+  norm_num
+
+-- An example of how to use fractional units
+
+abbrev half_frequency_unit := (1/2:ℚ) • frequency_unit
+abbrev SqrtFrequency := Scalar half_frequency_unit
+abbrev sqrt_hertz:SqrtFrequency := StandardUnit _
+
+example : sqrt_hertz**2 = hertz := by
+  simp [←Scalar.val_inj, half_frequency_unit, frequency_unit, sqrt_hertz]
+
+example {w : SqrtFrequency} (hw : w = 2 • sqrt_hertz) : hertz.in (w**2) = 4 := by
+  simp [←Scalar.val_inj, half_frequency_unit, frequency_unit, hw]
+  norm_num
+
+/-- An example of a non-negative scalar type -/
+abbrev NNTemperature := { T:Temperature // T ≥ 0 }
+
+end SI
+```
+
+--- File: Foundations/SITheorem.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+
+
+namespace SI
+open UnitsSystem
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+@[simp] theorem speed_add_time_eq_accel_two_time :
+  speed_unit + time_unit = acceleration_unit + (2 • time_unit) := by
+  -- Expand to dimension expressions
+  unfold speed_unit acceleration_unit length_unit time_unit
+  -- Rewrite `x - y` as `x + (-y)`, rewrite `2 • y` as `y + y`,
+  -- then normalize with commutativity/associativity of addition
+  simp [sub_eq_add_neg, two_smul, smul_add, add_smul,
+        add_comm, add_left_comm, add_assoc]
+
+@[simp] theorem accel_two_time_eq_length :
+  acceleration_unit + (2 • time_unit) = length_unit := by
+  unfold acceleration_unit length_unit time_unit
+  -- Simplify using negation, distributivity, and additive laws
+  simp [sub_eq_add_neg, two_smul, smul_add, add_smul,
+        add_comm, add_left_comm, add_assoc]
+
+end SI
+```
+
+--- File: Mechanics/Displacement.lean ---
+```lean4
+import PhysLib.Foundations.SI
+
+namespace SI.Mechanics
+open UnitsSystem SI
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+abbrev Displacement := Length
+
+end SI.Mechanics
+```
+
+--- File: Mechanics/Motion.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+
+namespace SI.Mechanics
+open UnitsSystem SI
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+-- Displacement
+@[simp] def displacement_end_x_init_x (x2  : Length) (x1 : Length) : Length := x2 - x1
+@[simp] lemma displacement_end_x_init_x_eq (x2 x1 : Length) :
+  displacement_end_x_init_x x2 x1 = x2 - x1 := rfl
+theorem displacement_init_x_to_end_x
+  (x2 x1 dx: Length)
+  (hΔx : dx = displacement_end_x_init_x x2 x1):
+  x2 = x1 + dx := by
+    -- From dx = (x2 - x1), obtain (x2 - x1) = dx
+  have hx : x2 - x1 = dx := by
+    simpa [displacement_end_x_init_x_eq] using hΔx.symm
+  -- Use the general lemma: x - y = z ⇒ x = z + y
+  have hx' : x2 = dx + x1 := eq_add_of_sub_eq hx
+  -- Swap order of summands to get target form
+  simpa [add_comm] using hx'
+
+-- Constant Speed Motion
+@[simp] def displacement_delta_t_const_v (v : Speed) (t : Time) : Length := v * t
+@[simp] lemma displacement_delta_t_const_v_eq (v : Speed) (t : Time) :
+  displacement_delta_t_const_v v t = v * t := rfl
+
+theorem displacement_eq
+  (x2 x1 dx1 dx2: Length) (v : Speed) (t : Time)
+  (hΔx1 : dx1 = displacement_end_x_init_x x2 x1)
+  (hΔx2 : dx2 = displacement_delta_t_const_v v t)
+  (hΔx : dx1 = dx2):
+  x2 - x1 = v * t := by
+  have h' : displacement_end_x_init_x x2 x1 = displacement_delta_t_const_v v t := by
+    simpa [hΔx1, hΔx2] using hΔx
+  simpa [displacement_end_x_init_x_eq, displacement_delta_t_const_v_eq] using h'
+
+theorem delta_t_const_v_init_x_to_end_x_version0
+  (x2 x1 dx1 dx2: Length) (v : Speed) (t : Time)
+  (hΔx1 : dx1 = displacement_end_x_init_x x2 x1 )
+  (hΔx2 : dx2 = (displacement_delta_t_const_v v t )/1)
+  (hΔx : dx1 = dx2):
+  x2 = v*t/1 + x1:= by
+  -- dx1 = dx2
+  have h' :
+      displacement_end_x_init_x x2 x1
+    = (displacement_delta_t_const_v v t) / (1 : ℕ ) := by
+    simpa [hΔx1, hΔx2] using hΔx
+  -- x2 - x1 = v * t / 1
+  have hx : x2 - x1 = v * t / (1 : ℕ ) := by
+    simpa [displacement_end_x_init_x_eq, displacement_delta_t_const_v_eq] using h'
+  -- x - y = z ⇒ x = z + y
+  exact eq_add_of_sub_eq hx
+
+theorem delta_t_const_v_init_x_to_end_x_version1
+  (x2 x1 dx1 dx2 : Length) (v : Speed) (t : Time)
+  (hΔx1 : dx1 = displacement_end_x_init_x x2 x1)
+  (hΔx2 : dx2 = displacement_delta_t_const_v v t)
+  (hΔx  : dx1 = dx2) :
+  x2 = x1 + displacement_delta_t_const_v v t := by
+  -- dx1 = dx2
+  have h' :
+    displacement_end_x_init_x x2 x1 = displacement_delta_t_const_v v t := by
+    simpa [hΔx1, hΔx2] using hΔx
+  -- x2 - x1 = displacement_delta_t_const_v v t
+  have hx : x2 - x1 = displacement_delta_t_const_v v t := by
+    simpa [displacement_end_x_init_x_eq] using h'
+  -- x − y = z ⇒ x = y + z
+  exact (eq_add_of_sub_eq hx).trans (by simp [add_comm])
+
+-- Non-constant Speed
+@[simp] def delta_v_end_v_init_v (v2 : Speed) (v1 : Speed) : Speed := v2 - v1
+@[simp] lemma delta_v_end_v_init_v_eq (v2 v1 : Speed) :
+  delta_v_end_v_init_v v2 v1 = v2 - v1 := rfl
+
+-- Constant Acceleration
+@[simp] def delta_v_delta_t_const_a (a : Acceleration) (t : Time) : Speed := a * t
+@[simp] lemma delta_v_delta_t_const_a_eq (a : Acceleration) (t : Time) :
+  delta_v_delta_t_const_a a t = a * t := rfl
+
+theorem delta_v_eq
+  (v2 v1 dv1 dv2: Speed) (a : Acceleration) (t : Time)
+  (hΔv1 : dv1 = delta_v_end_v_init_v v2 v1)
+  (hΔv2 : dv2 = delta_v_delta_t_const_a a t)
+  (hΔv : dv1 = dv2):
+  v2 - v1 = a * t := by
+  have h' : delta_v_end_v_init_v v2 v1 = delta_v_delta_t_const_a a t := by
+    simpa [hΔv1, hΔv2] using hΔv
+  -- Expand both sides using the @[simp] lemmas to reach the goal
+  simpa [delta_v_end_v_init_v_eq, delta_v_delta_t_const_a_eq] using h'
+
+theorem delta_v_const_a_init_v_to_end_v_version0
+  (v2 v1 dv1 dv2: Speed) (a : Acceleration) (t : Time)
+  (hΔv1 : dv1 = delta_v_end_v_init_v v2 v1)
+  (hΔv2 : dv2 = (delta_v_delta_t_const_a a t)/1)
+  (hΔv : dv1 = dv2):
+  v2 = a*t/1 + v1:= by
+  -- dv1 = dv2
+  have h' :
+      delta_v_end_v_init_v v2 v1
+    = (delta_v_delta_t_const_a a t) / (1 : ℕ ) := by
+    simpa [hΔv1, hΔv2] using hΔv
+  -- v2 - v1 = a * t / 1
+  have hv : v2 - v1 = a * t / (1 : ℕ ) := by
+    simpa [delta_v_end_v_init_v_eq, delta_v_delta_t_const_a_eq] using h'
+  -- x - y = z ⇒ x = z + y
+  exact eq_add_of_sub_eq hv
+
+theorem delta_v_const_a_init_v_to_end_v_version1
+  (v2 v1 dv1 dv2: Speed) (a : Acceleration) (t : Time)
+  (hΔv1 : dv1 = delta_v_end_v_init_v v2 v1)
+  (hΔv2 : dv2 = delta_v_delta_t_const_a a t)
+  (hΔv : dv1 = dv2):
+  v2 = v1 + delta_v_delta_t_const_a a t := by
+  -- dv1 = dv2
+  have h' :
+      delta_v_end_v_init_v v2 v1
+    = delta_v_delta_t_const_a a t := by
+    simpa [hΔv1, hΔv2] using hΔv
+  -- v2 - v1 = delta_v_delta_t_const_a a t
+  have hv : v2 - v1 = delta_v_delta_t_const_a a t := by
+    simpa [delta_v_end_v_init_v_eq] using h'
+  -- x − y = z ⇒ x = y + z
+  exact (eq_add_of_sub_eq hv).trans (by simp [add_comm])
+
+/-- Under constant acceleration, the two displacement formulas are equivalent:
+    `v0 * t + (a * t^2)/2 = ((v + v0)/2) * t`.
+    This uses only the velocity increment relation `v - v0 = a * t`. -/
+theorem disp_const_a_forms_eq
+  (v2 v1 : Speed) (a : Acceleration) (t : Time)
+  (hv : delta_v_end_v_init_v v2 v1 = delta_v_delta_t_const_a a t) :
+  v1 * t + a * t ** 2 / 2 = (v2 + v1) / (2 : ℝ ) * t := by
+sorry
+
+/-- Under constant acceleration, the two displacement formulas are equivalent:
+    `v1 * t + (a * t^2)/2 = ((v2 + v1)/2) * t`,
+    using only `v2 - v1 = a * t`.
+    This avoids having `a * t` appear directly inside addition. -/
+theorem disp_const_a_forms_eq0
+  (v2 v1 : Speed) (a : Acceleration) (t : Time)
+  (hv : delta_v_end_v_init_v v2 v1 = delta_v_delta_t_const_a a t) :
+  v1 * t + (a * (t ** 2)) / 2 = ((v2 + v1) / (2 : ℝ)) * t := by sorry
+
+end SI.Mechanics
+
+namespace SI.Mechanics.Testfield
+open UnitsSystem SI SI.Mechanics
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+theorem delta_t_const_v_init_x_to_end_x_origin0
+  (x2 x1 dx1 dx2 : Length) (v : Speed) (t : Time)
+  (hΔx1 : dx1 = displacement_end_x_init_x x2 x1)
+  (hΔx2 : dx2 = displacement_delta_t_const_v v t)
+  (hΔx  : dx1 = dx2) :
+  x2 = x1 + displacement_delta_t_const_v v t := by
+  -- From dx1 = dx2, get equivalence of the two displacement expressions
+  have h' :
+    displacement_end_x_init_x x2 x1 = displacement_delta_t_const_v v t := by
+    simpa [hΔx1, hΔx2] using hΔx
+  -- Expand left-hand displacement: x2 - x1 = displacement_delta_t_const_v v t
+  have hx : x2 - x1 = displacement_delta_t_const_v v t := by
+    simpa [displacement_end_x_init_x_eq] using h'
+  have := (eq_add_of_sub_eq hx)
+  -- Now this : x2 = displacement_delta_t_const_v v t + x1
+  -- Swap order + expand
+  simpa [displacement_delta_t_const_v_eq, add_comm] using this
+
+end SI.Mechanics.Testfield
+```
+
+--- File: Mechanics/NewtonsLaw.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+
+namespace SI
+open UnitsSystem
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+/-! # Newton's Second Law
+`F = m * a` can be made both as a computational function and as a rewriting lemma.
+-/
+
+/-- Computational version: obtain force from mass and acceleration. -/
+@[simp] def secondLaw (m : Mass) (a : Acceleration) : Force := m * a
+
+/-- Convenient alias: `F_of` looks more "function-like." -/
+@[simp] abbrev F_of (m : Mass) (a : Acceleration) : Force := secondLaw m a
+
+/-- Rewriting version (law equation): rewrite `F` into `m * a`.
+Useful when the problem states Newton's second law. -/
+@[simp] lemma newton_second_law (m : Mass) (a : Acceleration) :
+    F_of m a = m * a := rfl
+
+/-
+## Usage examples
+Consistent with your workflow of units, `Scalar.val_inj`, `simp`, and `norm_num`.
+-/
+
+variable (m:Mass) (a:Acceleration) (F:Force) (v:Speed) (p:Momentum) (E:Energy) (h:Length) (t:Time)
+
+-- 1) Directly compute the force: given m and a, obtain F, and evaluate in newtons.
+example (hm : m = 2 • kilogram) (ha : a = 3 • meter / second**2) :
+    newton.in (F_of m a) = 6 := by
+  -- `F_of m a` is just `m * a`
+  simp [← Scalar.val_inj, F_of, hm, ha, kilogram, meter, second, newton]
+  norm_num
+
+-- 2) Problem states "Newton's Second Law holds," rewrite unknown F and compute the value.
+example (first_law : F = m * a)
+        (hm : m = 2 • kilogram) (ha : a = 3 • meter / second**2) :
+    F = 6 • newton := by
+  simp [← Scalar.val_inj, first_law, hm, ha, kilogram, meter, second, newton]
+  norm_num
+
+/-
+## Suggested usage habits
+
+- The "function API" (`F_of`, `a_of`, `m_of`) is for **numerical evaluation**
+  (together with `... .in`, `simp`, `norm_num`), just like your numerical examples.
+- The "law equation/lemma" (`newton_second_law`) is for **rewriting**:
+  when the problem states Newton's second law, you can directly use
+  `simp [first_law]` or `simp [newton_second_law]` to reduce expressions into units and scalars.
+- Define all such physical laws with a **two-layer API** (computational function + rewriting lemma).
+  This keeps consistent style for momentum theorem, Hooke's law, work–energy theorem, etc.
+- Prepare convenient aliases for common derived quantities
+  (like `F_of`/`a_of`/`m_of`) to reduce boilerplate (`rfl`, `simp`).
+- If you want "whenever the dimensional relation matches, automatically apply the law,"
+  mark the lemma with `@[simp]` (already done above),
+  then simply run `simp`/`simp_all` at the beginning of the proof to bring in `F_of ...`, `a_of ...`, etc.
+-/
+
+end SI
+```
+
+--- File: Thermodynamics/Celsius.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+import Mathlib.Algebra.Group.MinimalAxioms
+
+namespace SI.Thermodynamics
+open UnitsSystem SI
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+/-- Conversion between Celsius (°C) and Kelvin (K):
+`T(°C) = T(K) - 273.15`. -/
+noncomputable abbrev celsius : Temperature :=
+  kelvin - (27315/100 : ℚ) • kelvin
+
+end SI.Thermodynamics
+```
+
+--- File: Thermodynamics/Volume.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+import Mathlib.Algebra.Group.MinimalAxioms
+
+namespace SI.Thermodynamics
+open UnitsSystem SI
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+abbrev area_unit := 2 • length_unit
+abbrev Area := Scalar area_unit
+
+abbrev volume_unit := 3 • length_unit
+abbrev Volume := Scalar volume_unit
+-- @[simp] def cubic_meter : Volume := 1 • meter**3
+
+abbrev heat_capacity_unit := energy_unit - temperature_unit - mass_unit
+abbrev HeatCapacity := Scalar heat_capacity_unit
+
+abbrev thermal_conductivity_unit := energy_unit - time_unit - length_unit - temperature_unit
+abbrev ThermalConductivity := Scalar thermal_conductivity_unit
+
+abbrev heat_of_fusion_unit := energy_unit - mass_unit
+abbrev HeatOfFusion := Scalar heat_of_fusion_unit
+
+end SI.Thermodynamics
+```
+
+--- File: Electromagnetism/Couloubconstant.lean ---
+```lean4
+import PhysLib.Foundations.SI
+import Mathlib
+
+namespace SI.Electromagnetism
+open UnitsSystem SI
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+noncomputable abbrev K:Scalar (force_unit + (2 • length_unit) - 2•charge_unit) :=
+    ((9:ℝ) * (10:ℝ)^(-9:ℤ)) • StandardUnit _
+
+end SI.Electromagnetism
+```
+
+--- File: WavesAcoustics/Periodic.lean ---
+```lean4
+import Mathlib.Tactic
+import PhysLib.Foundations.SI
+import Mathlib.Algebra.Group.MinimalAxioms
+
+namespace SI.Waves
+open UnitsSystem SI
+unseal Rat.add Rat.mul Rat.sub Rat.inv
+
+abbrev Wavelength := Length
+-- @[simp] def wavelength (v : Speed) (f : Frequency) : Wavelength := v/f
+
+-- @[simp] abbrev F_of (m : Mass) (a : Acceleration) : Force := secondLaw m a
+
+-- @[simp] lemma newton_second_law (m : Mass) (a : Acceleration) :
+--     F_of m a = m * a := rfl
+
+
+end SI.Waves
+```
+

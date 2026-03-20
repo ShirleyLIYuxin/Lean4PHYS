@@ -10,14 +10,18 @@ We present **Lean4PHYS**, a comprehensive reasoning framework for college-level 
 
 - Please see the documentation of *PhysLib* : [document](https://yuxin.li/Lean4PHYS_web/docs/)
 
+- Please see the evaluation instruction: [Getting Start](doc/getting_start.md)
+
 ## LICENSE and Usage
 The PhysLib library is licensed with Apache-2.0, of which parts come from [teorth_analysis](https://github.com/teorth/analysis) , aligned with the origin repository. 
 The LeanPhysBench dataset is licensed with CC BY-NC 4.0, aligned with the copyright protection range of the source materials. Additionally, the dataset may not be used to train, fine-tune, or evaluate any machine learning or AI models, regardless of whether the use is commercial or non-commercial. 
 
 ## News
+[2026.3.19] 🔉 We have released the evaluation pipeline for *LeanPhysBench*, including inference, verification, and evaluation scripts. 
+
 [2026.3.5] 🔉 We have released the documentation for our enriched version of *PhysLib*. We will continue to improve the library and contributions from the community are more than welcome!
 
-[2026.3.2] 🔉 We have uploaded our initial version of *PhysLib* and *LeanPhysBench*. A structured ducomentation of *PhysLib*, enriched version of *PhysLib*, and the evaluation pipline of *LeanPhysBench* will coming soon. 
+[2026.3.2] 🔉 We have uploaded our initial version of *PhysLib* and *LeanPhysBench*. A structured documentation of *PhysLib*, enriched version of *PhysLib*, and the evaluation pipeline of *LeanPhysBench* will coming soon.
 
 ## Citing Us
 If you found our project useful, please cite us as: 
