@@ -8,9 +8,9 @@ writes results with Proof_verification_log.
 
 Usage:
   python verify.py \\
-    --checkpoint_dir ./checkpoints/DeepSeek-Prover-V2-7B-num16-0-200/ \\
+    --checkpoint_dir ../checkpoints/DeepSeek-Prover-V2-7B-num16-0-200/ \\
     --project_dir ../PhysLib_v1 \\
-    --output_dir ./checkpoints/DeepSeek-Prover-V2-7B-num16-0-200_verified/ \\
+    --output_dir ../checkpoints/DeepSeek-Prover-V2-7B-num16-0-200_verified/ \\
     --max_workers 16 \\
     --lib_version v1
 """
