@@ -4,8 +4,8 @@ Evaluation script: compute pass@N statistics from verified results.
 
 Usage:
   python evaluate.py \\
-    --verified_dir ./checkpoints/DeepSeek-Prover-V2-7B-num16-0-200_verified/ \\
-    --output results/DeepSeek-Prover-V2-7B.json
+    --verified_dir ../checkpoints/DeepSeek-Prover-V2-7B-num16-0-200_verified/ \\
+    --output ../results/DeepSeek-Prover-V2-7B.json
 """
 
 import argparse
